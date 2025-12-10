@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Gemini Christmas Magic",
+  "description": "A 3D interactive Christmas tree controlled by hand gestures via Gemini Live API. Use an open palm to explode the tree into particles, and point or touch to view memories.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

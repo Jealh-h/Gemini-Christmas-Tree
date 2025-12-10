@@ -247,10 +247,6 @@ export default function App() {
             isClicking={isPinching}
           />
 
-          <EffectComposer enableNormalPass={false}>
-            <Bloom luminanceThreshold={1} mipmapBlur intensity={1.5} />
-          </EffectComposer>
-
           <OrbitControls enableZoom={true} maxDistance={20} minDistance={2} enablePan={false} autoRotate={true} autoRotateSpeed={0.5} />
         </Canvas>
       </div>

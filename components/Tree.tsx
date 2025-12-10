@@ -105,7 +105,8 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
 
       arrays.rot.push(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
 
-      const r = 6.0 + Math.random() * 8.0; 
+      // Reduced explosion radius to keep particles visible on screen
+      const r = 3.0 + Math.random() * 4.0; 
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
       
@@ -246,7 +247,8 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
 
             if (isExploded) {
                 dummy.rotation.set(time + i, time + i, 0);
-                dummy.scale.set(0,0,0); 
+                // Keep particles visible, scale them down slightly instead of 0
+                dummy.scale.set(sx * 0.6, sy * 0.6, sz * 0.6); 
             } else {
                 const rx = data.rotations[ix];
                 const ry = data.rotations[iy];

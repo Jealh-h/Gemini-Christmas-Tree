@@ -28,7 +28,6 @@ export class VisionService {
   detect(video: HTMLVideoElement): HandGesture {
     if (!this.handLandmarker) return { gesture: GestureType.NONE, tip: null };
     
-    // STRICT CHECK: Video must have dimensions to be processed
     if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
       return { gesture: GestureType.NONE, tip: null };
     }
@@ -39,111 +38,89 @@ export class VisionService {
         const results = this.handLandmarker.detectForVideo(video, startTimeMs);
         this.lastVideoTime = video.currentTime;
 
-        // Safety check: ensure results exists and has landmarks array
         if (results && Array.isArray(results.landmarks) && results.landmarks.length > 0) {
           const landmarks = results.landmarks[0];
           
-          // Ensure we have a valid landmarks array for the hand
-          if (!landmarks || !Array.isArray(landmarks) || landmarks.length < 21) {
+          if (!landmarks || landmarks.length < 21) {
              return { gesture: GestureType.NONE, tip: null };
           }
 
-          const tip = { x: landmarks[8].x, y: landmarks[8].y };
+          // --- KEYPOINTS ---
+          const wrist = landmarks[0];
+          const thumbTip = landmarks[4];
+          const indexMCP = landmarks[5]; // Index knuckle
+          const indexTip = landmarks[8];
+          const middleTip = landmarks[12];
+          const ringTip = landmarks[16];
+          const pinkyTip = landmarks[20];
+          
+          // Joints for extension check (PIP = Proximal Interphalangeal Joint)
+          const indexPip = landmarks[6];
+          const middlePip = landmarks[10];
+          const ringPip = landmarks[14];
+          const pinkyPip = landmarks[18];
 
-          // 1. Check Pinch (Thumb Tip #4 close to Index Tip #8)
-          if (this.checkPinch(landmarks)) {
-            return { gesture: GestureType.PINCH, tip };
+          // --- HELPER FUNCTIONS ---
+          const dist = (a: any, b: any) => Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+
+          // Check if a finger is extended (Tip is significantly further from wrist than PIP)
+          const isExtended = (tip: any, pip: any) => dist(wrist, tip) > dist(wrist, pip) * 1.1;
+
+          // --- FINGER STATES ---
+          const indexExt = isExtended(indexTip, indexPip);
+          const middleExt = isExtended(middleTip, middlePip);
+          const ringExt = isExtended(ringTip, ringPip);
+          const pinkyExt = isExtended(pinkyTip, pinkyPip);
+          
+          // Thumb is extended if tip is far from Index MCP
+          const thumbExt = dist(thumbTip, indexMCP) > 0.15; 
+
+          // --- GESTURE LOGIC ---
+          const tip = { x: indexTip.x, y: indexTip.y };
+
+          // 1. PINCH (High Priority)
+          // Criteria: Thumb tip close to Index tip
+          const pinchDist = dist(thumbTip, indexTip);
+          const isPinchValues = pinchDist < 0.1;
+
+          if (isPinchValues) {
+            // Intelligent Check: Avoid confusing a FIST with a PINCH.
+            // In a fist, the index finger is curled, so Index Tip is close to Index MCP.
+            // In a pinch, the index finger is usually curved but extended away from the palm base.
+            const indexNotBuried = dist(indexTip, indexMCP) > 0.08; 
+            
+            if (indexNotBuried) {
+               return { gesture: GestureType.PINCH, tip };
+            }
           }
 
-          // 2. Check Open Palm (All fingers extended)
-          if (this.checkPalmOpen(landmarks)) {
-            return { gesture: GestureType.OPEN_PALM, tip };
-          }
-
-          // 3. Check Fist (All fingers curled)
-          if (this.checkFist(landmarks)) {
-            return { gesture: GestureType.FIST, tip };
-          }
-
-          // 4. Check Pointing (Index extended)
-          if (this.checkPointing(landmarks)) {
+          // 2. POINT
+          // Criteria: Index Extended, others Curled.
+          // We allow the Thumb to be anywhere (relaxed).
+          if (indexExt && !middleExt && !ringExt && !pinkyExt) {
             return { gesture: GestureType.POINT, tip };
+          }
+
+          // 3. FIST
+          // Criteria: Index, Middle, Ring, Pinky Curled.
+          if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
+             return { gesture: GestureType.FIST, tip };
+          }
+
+          // 4. OPEN PALM
+          // Criteria: All non-thumb fingers extended.
+          if (indexExt && middleExt && ringExt && pinkyExt) {
+             // Usually thumb is out too for a full open palm, but 4 fingers is a strong enough signal
+             return { gesture: GestureType.OPEN_PALM, tip };
           }
 
           return { gesture: GestureType.NONE, tip };
         }
       } catch (e) {
-        // Suppress sporadic media pipe errors during video initialization
         return { gesture: GestureType.NONE, tip: null };
       }
     }
     
     return { gesture: GestureType.NONE, tip: null };
-  }
-
-  private checkPinch(landmarks: any[]): boolean {
-    if (!landmarks || landmarks.length < 9) return false;
-    const thumbTip = landmarks[4];
-    const indexTip = landmarks[8];
-    const distance = this.dist(thumbTip, indexTip);
-    // Relaxed threshold for easier clicking (0.12 -> 0.15)
-    return distance < 0.15; 
-  }
-
-  private checkPointing(landmarks: any[]): boolean {
-    if (!landmarks || landmarks.length < 13) return false;
-    const wrist = landmarks[0];
-    const indexTip = landmarks[8];
-    const indexPip = landmarks[6];
-    const middleTip = landmarks[12];
-    const middlePip = landmarks[10];
-
-    const isIndexExtended = this.dist(wrist, indexTip) > this.dist(wrist, indexPip);
-    if (!isIndexExtended) return false;
-
-    const distIndex = this.dist(wrist, indexTip);
-    const distMiddle = this.dist(wrist, middleTip);
-
-    // Relaxed constraint: Middle finger can be very extended (0.85 -> 0.8)
-    // allowing for lazy pointing.
-    if (distMiddle > distIndex * 0.8) return false;
-
-    return true; 
-  }
-
-  private checkPalmOpen(landmarks: any[]): boolean {
-    if (!landmarks || landmarks.length < 21) return false;
-    const wrist = landmarks[0];
-    const tipIds = [8, 12, 16, 20];
-    const pipIds = [6, 10, 14, 18];
-    
-    let extendedCount = 0;
-    for(let i=0; i<4; i++) {
-        const dTip = this.dist(wrist, landmarks[tipIds[i]]);
-        const dPip = this.dist(wrist, landmarks[pipIds[i]]);
-        if (dTip > dPip * 1.1) extendedCount++;
-    }
-    
-    return extendedCount >= 3; 
-  }
-
-  private checkFist(landmarks: any[]): boolean {
-    if (!landmarks || landmarks.length < 21) return false;
-    const wrist = landmarks[0];
-    const tipIds = [8, 12, 16, 20];
-    const pipIds = [6, 10, 14, 18];
-    
-    let curledCount = 0;
-    for(let i=0; i<4; i++) {
-        const dTip = this.dist(wrist, landmarks[tipIds[i]]);
-        const dPip = this.dist(wrist, landmarks[pipIds[i]]);
-        if (dTip < dPip) curledCount++;
-    }
-    
-    return curledCount >= 3;
-  }
-
-  private dist(a: {x: number, y: number}, b: {x: number, y: number}) {
-    return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
   }
 }

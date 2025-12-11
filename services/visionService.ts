@@ -5,6 +5,13 @@ import { GestureType, HandGesture } from "../types";
 export class VisionService {
   private handLandmarker: HandLandmarker | null = null;
   private lastVideoTime = -1;
+  
+  // Stability Buffer
+  private gestureHistory: GestureType[] = [];
+  private historySize = 5;
+
+  // Hysteresis State
+  private lastStableGesture: GestureType = GestureType.NONE;
 
   async initialize() {
     try {
@@ -26,15 +33,18 @@ export class VisionService {
   }
 
   detect(video: HTMLVideoElement): HandGesture {
-    if (!this.handLandmarker) return { gesture: GestureType.NONE, tip: null };
+    // Default safe return
+    const fallback: HandGesture = { gesture: GestureType.NONE, tip: null };
+
+    if (!this.handLandmarker) return fallback;
     
     if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
-      return { gesture: GestureType.NONE, tip: null };
+      return fallback;
     }
     
-    if (video.currentTime !== this.lastVideoTime) {
-      const startTimeMs = performance.now();
-      try {
+    try {
+      if (video.currentTime !== this.lastVideoTime) {
+        const startTimeMs = performance.now();
         const results = this.handLandmarker.detectForVideo(video, startTimeMs);
         this.lastVideoTime = video.currentTime;
 
@@ -42,16 +52,16 @@ export class VisionService {
           const landmarks = results.landmarks[0];
           
           if (!landmarks || landmarks.length < 21) {
-             return { gesture: GestureType.NONE, tip: null };
+             return fallback;
           }
 
           // --- HELPER FUNCTIONS ---
           const dist = (a: any, b: any) => Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
 
-          // --- KEYPOINTS ---
           const wrist = landmarks[0];
           const thumbTip = landmarks[4];
-          const indexMCP = landmarks[5];
+          const thumbIp = landmarks[3]; 
+          const indexMcp = landmarks[5];
           const indexPip = landmarks[6];
           const indexTip = landmarks[8];
           const middlePip = landmarks[10];
@@ -61,62 +71,100 @@ export class VisionService {
           const pinkyPip = landmarks[18];
           const pinkyTip = landmarks[20];
 
-          // Reference Scale: Distance from Wrist to Middle MCP (Knuckle)
+          // Use Palm Size (Wrist to Middle Knuckle) as a relative scale
           const handScale = dist(wrist, landmarks[9]); 
-          if (handScale < 0.01) return { gesture: GestureType.NONE, tip: null };
-
-          // --- FINGER STATES ---
-          // A finger is "Curled" if the Tip is closer to the wrist than the PIP joint
-          const isCurled = (tip: any, pip: any) => dist(wrist, tip) < dist(wrist, pip);
           
-          // Check extensions
-          const indexExt = !isCurled(indexTip, indexPip);
-          const middleExt = !isCurled(middleTip, middlePip);
-          const ringExt = !isCurled(ringTip, ringPip);
-          const pinkyExt = !isCurled(pinkyTip, pinkyPip);
+          // --- GEOMETRY CHECKS ---
 
-          const allCurled = !indexExt && !middleExt && !ringExt && !pinkyExt;
-          const allExtended = indexExt && middleExt && ringExt && pinkyExt;
+          // 1. Extension Check
+          // Tip must be significantly further from wrist than PIP
+          // Hysteresis: If we were already OPEN, we are more lenient (0.9x threshold)
+          const isOpenThreshold = this.lastStableGesture === GestureType.OPEN_PALM ? 0.9 : 1.0;
+          
+          const isFingerExtended = (tip: any, pip: any) => dist(wrist, tip) > (dist(wrist, pip) * isOpenThreshold);
+          const isFingerCurled = (tip: any, pip: any) => dist(wrist, tip) < dist(wrist, pip);
 
-          // Standardize Tip: Always use Index Finger Tip for consistency
-          const tip = { x: indexTip.x, y: indexTip.y };
+          const indexOpen = isFingerExtended(indexTip, indexPip);
+          const middleOpen = isFingerExtended(middleTip, middlePip);
+          const ringOpen = isFingerExtended(ringTip, ringPip);
+          const pinkyOpen = isFingerExtended(pinkyTip, pinkyPip);
+          
+          // Thumb is tricky. Check if tip is far from index knuckle (MCP)
+          const thumbOpen = dist(thumbTip, landmarks[5]) > handScale * 0.5;
 
-          // --- PRIORITY LOGIC ---
-          // 1. FIST (Reset) - Highest Priority
-          // Strict check: All 4 fingers must be curled tight.
-          if (allCurled) {
-             return { gesture: GestureType.FIST, tip };
-          }
-
-          // 2. OPEN PALM (Explode)
-          // Strict check: All 4 fingers must be extended.
-          if (allExtended) {
-             // Ensure fingers are somewhat spread or clearly away from wrist
-             return { gesture: GestureType.OPEN_PALM, tip };
-          }
-
-          // 3. PINCH (Click/Select)
-          // Logic: Thumb tip is close to Index tip.
-          // We allow this even if other fingers are loose.
+          const openCount = (indexOpen ? 1 : 0) + (middleOpen ? 1 : 0) + (ringOpen ? 1 : 0) + (pinkyOpen ? 1 : 0);
+          
+          // 2. Pinch Distance
           const pinchDist = dist(thumbTip, indexTip);
           
-          // Threshold: 15% of hand scale is a good pinch zone
-          if (pinchDist < handScale * 0.15) {
-             return { gesture: GestureType.PINCH, tip };
+          // --- LOGIC ---
+          let rawGesture = GestureType.POINT; // Default fallback to ensure cursor works
+
+          // A. PINCH (OK)
+          // High Priority: Thumb close to Index. 
+          // Safety: Check distance from Index Tip to Index MCP (Knuckle).
+          // In a Fist, the tip is buried in the palm (close to MCP). In a Pinch, it's further out.
+          // Threshold: 0.3 * handScale seems safe.
+          const isIndexScrunched = dist(indexTip, indexMcp) < (handScale * 0.25);
+
+          // Hysteresis: If already pinching, allow larger distance
+          const pinchThreshold = this.lastStableGesture === GestureType.PINCH ? 0.30 : 0.20;
+          
+          if (pinchDist < handScale * pinchThreshold && !isIndexScrunched) {
+             rawGesture = GestureType.PINCH;
+          }
+          // B. FIST (Reset)
+          // All fingers strictly curled.
+          else if (!indexOpen && !middleOpen && !ringOpen && !pinkyOpen) {
+             rawGesture = GestureType.FIST;
+          }
+          // C. OPEN PALM (Explode)
+          // At least 4 fingers extended (Thumb optional, or 3 fingers + thumb)
+          // Preventing flicker: If 3 fingers are open, it's likely an open palm, just relaxed.
+          else if (openCount >= 3) {
+             rawGesture = GestureType.OPEN_PALM;
+          }
+          // D. POINT (Cursor)
+          // Default state if nothing else matches. 
+          else {
+             rawGesture = GestureType.POINT;
           }
 
-          // 4. POINT / CURSOR (Default Fallback)
-          // If the hand is visible, but NOT a Fist, NOT Open Palm, and NOT Pinching...
-          // We treat it as a "Point" or "Hover".
-          // This ensures the cursor NEVER disappears as long as the hand is tracked.
-          return { gesture: GestureType.POINT, tip };
-          
+          // --- STABILITY BUFFER (DEBOUNCING) ---
+          this.gestureHistory.push(rawGesture);
+          if (this.gestureHistory.length > this.historySize) {
+            this.gestureHistory.shift();
+          }
+
+          // Simple Voting
+          const counts: Record<string, number> = {};
+          for (const g of this.gestureHistory) {
+            counts[g] = (counts[g] || 0) + 1;
+          }
+
+          let stableGesture = this.lastStableGesture;
+          // Only switch if > 60% of history agrees
+          for (const g of Object.keys(counts)) {
+             if (counts[g] > this.historySize * 0.6) {
+                stableGesture = g as GestureType;
+                break;
+             }
+          }
+
+          this.lastStableGesture = stableGesture;
+
+          // Always return tip for cursor, regardless of gesture
+          return { gesture: stableGesture, tip: { x: indexTip.x, y: indexTip.y } };
         }
       } catch (e) {
-        return { gesture: GestureType.NONE, tip: null };
+         // Ignore
       }
+    } catch (e) {
+      // Ignore
     }
     
-    return { gesture: GestureType.NONE, tip: null };
+    // Fallback: If tracking fails but we had a gesture, maybe hold it for a split second? 
+    // For now, return NONE but keep tip null.
+    return fallback;
   }
 }

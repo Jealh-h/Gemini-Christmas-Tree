@@ -7,7 +7,7 @@ import { PhotoGallery } from './components/PhotoGallery';
 import { Snow } from './components/Snow';
 import { CursorOverlay } from './components/CursorOverlay';
 import { VisionService } from './services/visionService';
-import { TreeMode, GestureType } from './types';
+import { TreeMode, GestureType, PhotoData } from './types';
 import { PHOTOS_DATA } from './constants';
 
 // Increased smoothing for "Air Mouse" feel
@@ -23,8 +23,12 @@ export default function App() {
   const [mode, setMode] = useState<TreeMode>(TreeMode.NORMAL);
   const [isVisionReady, setIsVisionReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Photo State
+  const [userPhotos, setUserPhotos] = useState<PhotoData[]>(PHOTOS_DATA); // Start with default
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [photoDescription, setPhotoDescription] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [cursorPosition, setCursorPosition] = useState<{x: number, y: number} | null>(null);
   const [cursorHistory, setCursorHistory] = useState<{x: number, y: number}[]>([]);
@@ -160,13 +164,50 @@ export default function App() {
     setPhotoDescription(null); 
 
     if (id) {
-        // Find static description instead of calling AI
-        const photo = PHOTOS_DATA.find(p => p.id === id);
+        // Find static description 
+        const photo = userPhotos.find(p => p.id === id);
         if (photo) {
-            setPhotoDescription(photo.description);
+            setPhotoDescription(photo.description || "A beautiful memory.");
         }
     }
-  }, [selectedPhotoId]);
+  }, [selectedPhotoId, userPhotos]);
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const newPhotos: PhotoData[] = [];
+    
+    // Explicitly type file as File
+    Array.from(files).forEach((file: File, index) => {
+      const url = URL.createObjectURL(file);
+      
+      // Generate Random Position for "Normal" mode (surface of cone)
+      // Tree roughly: y from -1 to 4. 
+      const y = (Math.random() * 3.5) - 0.5; // Random height between -0.5 and 3.0
+      const heightPercent = (y + 1) / 5; // approx 0 to 1
+      const maxRadius = 1.8 * (1 - heightPercent * 0.8); 
+      const radius = 0.5 + Math.random() * (maxRadius - 0.5); // Keep slightly away from center trunk
+      const angle = Math.random() * Math.PI * 2;
+      
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+
+      newPhotos.push({
+        id: `user-${Date.now()}-${index}`,
+        url: url,
+        position: [x, y, z],
+        rotation: [0, -angle, 0], // Face outwards roughly
+        description: `Uploaded Memory ${index + 1}`
+      });
+    });
+
+    setUserPhotos(newPhotos);
+  };
+
+  const triggerFileUpload = () => {
+    fileInputRef.current?.click();
+  };
 
   const isPinching = currentGesture === GestureType.PINCH;
 
@@ -180,13 +221,41 @@ export default function App() {
            </Canvas>
          </div>
          
-         <div className="z-10 text-center p-8 bg-black/50 backdrop-blur-md rounded-3xl border border-white/10 shadow-2xl animate-in fade-in zoom-in duration-700">
+         <div className="z-10 flex flex-col items-center text-center p-8 bg-black/50 backdrop-blur-md rounded-3xl border border-white/10 shadow-2xl animate-in fade-in zoom-in duration-700 max-w-2xl w-full">
             <h1 className="text-5xl md:text-7xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 via-red-500 to-green-600 font-serif">
               Christmas Magic
             </h1>
             <p className="text-xl text-gray-300 mb-8 max-w-md mx-auto">
               Experience an interactive 3D Christmas Tree controlled by your hand gestures.
             </p>
+
+            {/* Upload Section - Before Start */}
+            <div className="mb-8 w-full flex flex-col items-center gap-3">
+               <input 
+                 type="file" 
+                 accept="image/*" 
+                 multiple 
+                 ref={fileInputRef} 
+                 onChange={handleFileUpload} 
+                 className="hidden" 
+               />
+               
+               <div className="flex gap-4">
+                  <button 
+                    onClick={triggerFileUpload}
+                    className="flex items-center gap-2 px-6 py-3 bg-white/10 hover:bg-white/20 border border-white/30 rounded-full text-white transition-all"
+                  >
+                    <i className="fas fa-images text-yellow-400"></i>
+                    Upload Your Photos
+                  </button>
+               </div>
+               
+               {userPhotos.length > 0 && userPhotos[0].id.startsWith('user') && (
+                  <p className="text-green-400 text-sm animate-pulse">
+                     <i className="fas fa-check-circle mr-1"></i> {userPhotos.length} photos loaded ready for magic!
+                  </p>
+               )}
+            </div>
 
             {error && (
                <div className="mb-6 p-4 bg-red-900/50 border border-red-500 rounded-xl text-red-200 text-sm max-w-sm mx-auto">
@@ -198,20 +267,19 @@ export default function App() {
             <button 
               onClick={handleStart}
               disabled={isLoading}
-              className="group relative px-8 py-4 bg-white text-black text-xl font-bold rounded-full overflow-hidden transition-transform transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="group relative px-10 py-5 bg-gradient-to-r from-green-600 to-green-800 text-white text-2xl font-bold rounded-full overflow-hidden transition-transform transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(34,197,94,0.5)]"
             >
-               <span className="relative z-10 flex items-center gap-2">
+               <span className="relative z-10 flex items-center gap-3">
                  {isLoading ? (
                    <><span>Loading...</span><i className="fas fa-circle-notch fa-spin"></i></>
                  ) : (
-                   <><span>Enter Experience</span><i className="fas fa-sparkles text-yellow-600"></i></>
+                   <><span>Enter Experience</span><i className="fas fa-sparkles text-yellow-300"></i></>
                  )}
                </span>
-               <div className="absolute inset-0 bg-gradient-to-r from-yellow-200 to-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
             </button>
             
             <p className="mt-6 text-sm text-gray-500">
-              <i className="fas fa-camera mr-2"></i> Camera access required
+              <i className="fas fa-camera mr-2"></i> Camera access required for gesture control
             </p>
          </div>
       </div>
@@ -250,6 +318,7 @@ export default function App() {
           <ChristmasTree mode={mode} />
 
           <PhotoGallery 
+             photos={userPhotos}
              mode={mode}
              cursorPosition={cursorPosition}
              isClicking={isPinching}
@@ -262,8 +331,7 @@ export default function App() {
              maxDistance={20} 
              minDistance={2} 
              enablePan={false} 
-             autoRotate={!selectedPhotoId} // Disable rotation when previewing to keep photo stable
-             autoRotateSpeed={0.5} 
+             autoRotate={false} 
           />
         </Canvas>
       </div>
@@ -302,7 +370,7 @@ export default function App() {
         
         {/* Caption Overlay */}
         {selectedPhotoId && photoDescription && (
-            <div className="self-center mb-10 bg-black/60 backdrop-blur-md p-4 rounded-xl border-t border-b border-gold-500/50 max-w-lg text-center animate-in fade-in slide-in-from-bottom-8 duration-500">
+            <div className="self-center mb-10 bg-black/60 backdrop-blur-md p-4 rounded-xl border-t border-b border-gold-500/50 max-w-lg text-center animate-in fade-in slide-in-from-bottom-8 duration-500 pointer-events-auto">
                  <p className="text-white text-lg italic font-serif leading-relaxed opacity-90 text-shadow">
                     "{photoDescription}"
                  </p>

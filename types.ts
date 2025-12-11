@@ -17,14 +17,10 @@ export interface PhotoData {
   url: string;
   position: [number, number, number];
   rotation: [number, number, number];
-  description?: string; // Cache for Gemini generated description
+  description: string; // Static description
 }
 
 export interface HandGesture {
   gesture: GestureType;
   tip: { x: number; y: number } | null; // Normalized 0-1
-}
-
-export interface GeminiConfig {
-  apiKey: string;
 }

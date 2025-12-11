@@ -1,15 +1,17 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars } from '@react-three/drei';
-import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { ChristmasTree } from './components/Tree';
+import { PhotoGallery } from './components/PhotoGallery';
 import { Snow } from './components/Snow';
+import { CursorOverlay } from './components/CursorOverlay';
 import { VisionService } from './services/visionService';
-import { GeminiService } from './services/geminiService';
 import { TreeMode, GestureType } from './types';
 import { PHOTOS_DATA } from './constants';
 
-const CURSOR_SMOOTHING = 0.85;
+// Increased smoothing for "Air Mouse" feel
+const CURSOR_SMOOTHING = 0.90;
 
 const lerp = (start: number, end: number, t: number) => {
   return start * (1 - t) + end * t;
@@ -31,7 +33,6 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null); 
   const visionService = useRef(new VisionService());
-  const geminiService = useRef(new GeminiService());
   const requestRef = useRef<number | null>(null);
   
   const targetCursorRef = useRef<{x: number, y: number} | null>(null);
@@ -47,7 +48,7 @@ export default function App() {
     };
   }, []);
 
-  const startDetectionLoop = useCallback(() => {
+  const startDetectionLoop = () => {
     const loop = () => {
       if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0) {
         try {
@@ -59,10 +60,11 @@ export default function App() {
             setMode(TreeMode.EXPLODED);
           } else if (result.gesture === GestureType.FIST) {
             setMode(TreeMode.NORMAL);
-            setSelectedPhotoId(null); 
+            setSelectedPhotoId(null);
           }
 
-          const showCursor = result.tip && (result.gesture === GestureType.POINT || result.gesture === GestureType.PINCH);
+          // Show cursor for POINT, PINCH, or even generalized hand tracking (fallback POINT)
+          const showCursor = result.tip && (result.gesture === GestureType.POINT || result.gesture === GestureType.PINCH || result.gesture === GestureType.OPEN_PALM);
           
           if (showCursor && result.tip) {
             const rawTarget = { x: 1 - result.tip.x, y: result.tip.y };
@@ -75,6 +77,7 @@ export default function App() {
             const cur = currentCursorRef.current;
             const target = targetCursorRef.current;
             
+            // LERP for smooth movement
             const smoothX = lerp(cur.x, target.x, CURSOR_SMOOTHING);
             const smoothY = lerp(cur.y, target.y, CURSOR_SMOOTHING);
             
@@ -85,15 +88,16 @@ export default function App() {
             setCursorHistory(prev => {
               if (!prev) return [{ x: smoothX, y: smoothY }]; 
               const newHist = [...prev, { x: smoothX, y: smoothY }];
-              if (newHist.length > 15) newHist.shift(); 
+              if (newHist.length > 25) newHist.shift(); 
               return newHist;
             });
           } else {
-            if (result.gesture !== GestureType.POINT && result.gesture !== GestureType.PINCH) {
-              targetCursorRef.current = null;
-              currentCursorRef.current = null;
-              setCursorPosition(null);
-              setCursorHistory([]);
+            // Only clear cursor if hand is totally gone or in a macro gesture mode that shouldn't have a cursor (like Fist)
+            if (result.gesture === GestureType.FIST || result.gesture === GestureType.NONE) {
+               targetCursorRef.current = null;
+               currentCursorRef.current = null;
+               setCursorPosition(null);
+               setCursorHistory([]);
             }
           }
         } catch (e) {
@@ -103,7 +107,7 @@ export default function App() {
       requestRef.current = requestAnimationFrame(loop);
     };
     loop();
-  }, []);
+  };
 
   const handleStart = async () => {
     setIsLoading(true);
@@ -147,19 +151,23 @@ export default function App() {
         }
       };
     }
-  }, [hasStarted, startDetectionLoop]);
+  }, [hasStarted]);
 
-  const handlePhotoSelect = useCallback(async (id: string) => {
+  const handlePhotoSelect = useCallback((id: string | null) => {
     if (id === selectedPhotoId) return;
     
     setSelectedPhotoId(id);
-    setPhotoDescription("Gemini is reading this memory...");
-    
-    const desc = await geminiService.current.generateMemoryDescription(id);
-    setPhotoDescription(desc);
+    setPhotoDescription(null); 
+
+    if (id) {
+        // Find static description instead of calling AI
+        const photo = PHOTOS_DATA.find(p => p.id === id);
+        if (photo) {
+            setPhotoDescription(photo.description);
+        }
+    }
   }, [selectedPhotoId]);
 
-  const selectedPhoto = PHOTOS_DATA.find(p => p.id === selectedPhotoId);
   const isPinching = currentGesture === GestureType.PINCH;
 
   if (!hasStarted) {
@@ -218,7 +226,7 @@ export default function App() {
           shadows
           camera={{ position: [0, 0, 8], fov: 60 }} 
           gl={{ 
-            antialias: false, 
+            antialias: true,
             powerPreference: "high-performance",
             alpha: false, 
             stencil: false,
@@ -239,55 +247,28 @@ export default function App() {
           <Snow count={5000} />
           <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
           
-          <ChristmasTree 
-            mode={mode} 
-            onPhotoSelect={handlePhotoSelect} 
-            selectedPhotoId={selectedPhotoId}
-            cursorPosition={cursorPosition}
-            isClicking={isPinching}
+          <ChristmasTree mode={mode} />
+
+          <PhotoGallery 
+             mode={mode}
+             cursorPosition={cursorPosition}
+             isClicking={isPinching}
+             selectedPhotoId={selectedPhotoId}
+             onPhotoSelect={handlePhotoSelect}
           />
 
-          <OrbitControls enableZoom={true} maxDistance={20} minDistance={2} enablePan={false} autoRotate={true} autoRotateSpeed={0.5} />
+          <OrbitControls 
+             enableZoom={true} 
+             maxDistance={20} 
+             minDistance={2} 
+             enablePan={false} 
+             autoRotate={!selectedPhotoId} // Disable rotation when previewing to keep photo stable
+             autoRotateSpeed={0.5} 
+          />
         </Canvas>
       </div>
 
-      {cursorPosition && cursorHistory && cursorHistory.length > 0 && (
-        <>
-          {cursorHistory.map((pos, i) => {
-             const opacity = i / Math.max(cursorHistory.length, 1);
-             const scale = 0.5 + (opacity * 0.5);
-             return (
-               <div 
-                 key={i}
-                 className="absolute z-40 rounded-full bg-yellow-200 pointer-events-none transform -translate-x-1/2 -translate-y-1/2 blur-[1px]"
-                 style={{
-                   left: `${pos.x * 100}%`,
-                   top: `${pos.y * 100}%`,
-                   width: `${6 * scale}px`,
-                   height: `${6 * scale}px`,
-                   opacity: opacity * 0.6,
-                   boxShadow: `0 0 ${10 * scale}px rgba(255, 215, 0, 0.5)`
-                 }}
-               />
-             );
-          })}
-          
-          <div 
-            className="absolute z-50 pointer-events-none transform -translate-x-1/2 -translate-y-1/2 transition-transform duration-75 ease-out"
-            style={{ 
-              left: `${cursorPosition.x * 100}%`, 
-              top: `${cursorPosition.y * 100}%`,
-              transform: `translate(-50%, -50%) scale(${isPinching ? 0.8 : 1})`
-            }}
-          >
-             <div className="relative w-6 h-6 bg-white rounded-full shadow-[0_0_20px_rgba(255,255,255,1)] flex items-center justify-center">
-                <div className="absolute w-full h-full rounded-full border-2 border-yellow-300 animate-ping opacity-75"></div>
-                <div className="absolute w-[150%] h-[150%] border border-orange-400 rounded-full animate-spin opacity-40 border-t-transparent"></div>
-                <div className="absolute w-[200%] h-[200%] rounded-full bg-gradient-radial from-transparent to-yellow-500 opacity-20 animate-pulse"></div>
-             </div>
-          </div>
-        </>
-      )}
+      <CursorOverlay history={cursorHistory} isClicking={isPinching} />
 
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-6">
         
@@ -299,7 +280,7 @@ export default function App() {
             <p className="text-gray-300 text-sm mt-1 max-w-md bg-black/30 p-2 rounded backdrop-blur-sm">
               <span className="font-bold text-green-400">👋 Open Hand</span> to Explode | <span className="font-bold text-red-400">✊ Fist</span> to Reset
               <br/>
-              <span className="font-bold text-yellow-400">👆 Point</span> to Move Spark | <span className="font-bold text-orange-400">👌 Pinch</span> to Click
+              <span className="font-bold text-yellow-400">👆 Any Finger</span> to Move Wand | <span className="font-bold text-orange-400">👌 Pinch</span> to Select
             </p>
           </div>
           
@@ -318,30 +299,19 @@ export default function App() {
             </div>
           </div>
         </div>
-
-        {selectedPhoto && (
-          <div className="self-center mb-10 pointer-events-auto bg-black/80 backdrop-blur-xl p-6 rounded-2xl border border-gold-500/30 max-w-md shadow-2xl transition-all transform animate-in fade-in slide-in-from-bottom-8 duration-300">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold text-yellow-200" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>✨ Christmas Memory #{selectedPhoto.id}</h3>
-              <button 
-                onClick={() => setSelectedPhotoId(null)} 
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
-              >
-                <i className="fas fa-times"></i>
-              </button>
+        
+        {/* Caption Overlay */}
+        {selectedPhotoId && photoDescription && (
+            <div className="self-center mb-10 bg-black/60 backdrop-blur-md p-4 rounded-xl border-t border-b border-gold-500/50 max-w-lg text-center animate-in fade-in slide-in-from-bottom-8 duration-500">
+                 <p className="text-white text-lg italic font-serif leading-relaxed opacity-90 text-shadow">
+                    "{photoDescription}"
+                 </p>
+                 <div className="mt-2 text-xs text-white/40 uppercase tracking-widest">
+                    Make a Fist ✊ or Open Hand 👋 to Close
+                 </div>
             </div>
-            <div className="relative group">
-               <img src={selectedPhoto.url} alt="Memory" className="w-full h-64 object-cover rounded-lg shadow-black/50 shadow-lg mb-4 border-2 border-white/5" />
-               <div className="absolute inset-0 rounded-lg shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] pointer-events-none"></div>
-            </div>
-            <p className="text-white text-lg italic font-serif leading-relaxed text-center opacity-90">
-              "{photoDescription || "..."}"
-            </p>
-            <div className="mt-4 text-center text-xs text-white/40 uppercase tracking-widest">
-              Make a Fist ✊ to Close
-            </div>
-          </div>
         )}
+
       </div>
     </div>
   );

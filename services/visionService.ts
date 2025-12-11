@@ -45,76 +45,72 @@ export class VisionService {
              return { gesture: GestureType.NONE, tip: null };
           }
 
-          // --- KEYPOINTS ---
-          const wrist = landmarks[0];
-          const thumbTip = landmarks[4];
-          const indexMCP = landmarks[5]; // Index knuckle
-          const indexTip = landmarks[8];
-          const middleTip = landmarks[12];
-          const ringTip = landmarks[16];
-          const pinkyTip = landmarks[20];
-          
-          // Joints for extension check (PIP = Proximal Interphalangeal Joint)
-          const indexPip = landmarks[6];
-          const middlePip = landmarks[10];
-          const ringPip = landmarks[14];
-          const pinkyPip = landmarks[18];
-
           // --- HELPER FUNCTIONS ---
           const dist = (a: any, b: any) => Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
 
-          // Check if a finger is extended (Tip is significantly further from wrist than PIP)
-          const isExtended = (tip: any, pip: any) => dist(wrist, tip) > dist(wrist, pip) * 1.1;
+          // --- KEYPOINTS ---
+          const wrist = landmarks[0];
+          const thumbTip = landmarks[4];
+          const indexMCP = landmarks[5];
+          const indexPip = landmarks[6];
+          const indexTip = landmarks[8];
+          const middlePip = landmarks[10];
+          const middleTip = landmarks[12];
+          const ringPip = landmarks[14];
+          const ringTip = landmarks[16];
+          const pinkyPip = landmarks[18];
+          const pinkyTip = landmarks[20];
+
+          // Reference Scale: Distance from Wrist to Middle MCP (Knuckle)
+          const handScale = dist(wrist, landmarks[9]); 
+          if (handScale < 0.01) return { gesture: GestureType.NONE, tip: null };
 
           // --- FINGER STATES ---
-          const indexExt = isExtended(indexTip, indexPip);
-          const middleExt = isExtended(middleTip, middlePip);
-          const ringExt = isExtended(ringTip, ringPip);
-          const pinkyExt = isExtended(pinkyTip, pinkyPip);
+          // A finger is "Curled" if the Tip is closer to the wrist than the PIP joint
+          const isCurled = (tip: any, pip: any) => dist(wrist, tip) < dist(wrist, pip);
           
-          // Thumb is extended if tip is far from Index MCP
-          const thumbExt = dist(thumbTip, indexMCP) > 0.15; 
+          // Check extensions
+          const indexExt = !isCurled(indexTip, indexPip);
+          const middleExt = !isCurled(middleTip, middlePip);
+          const ringExt = !isCurled(ringTip, ringPip);
+          const pinkyExt = !isCurled(pinkyTip, pinkyPip);
 
-          // --- GESTURE LOGIC ---
+          const allCurled = !indexExt && !middleExt && !ringExt && !pinkyExt;
+          const allExtended = indexExt && middleExt && ringExt && pinkyExt;
+
+          // Standardize Tip: Always use Index Finger Tip for consistency
           const tip = { x: indexTip.x, y: indexTip.y };
 
-          // 1. PINCH (High Priority)
-          // Criteria: Thumb tip close to Index tip
-          const pinchDist = dist(thumbTip, indexTip);
-          const isPinchValues = pinchDist < 0.1;
-
-          if (isPinchValues) {
-            // Intelligent Check: Avoid confusing a FIST with a PINCH.
-            // In a fist, the index finger is curled, so Index Tip is close to Index MCP.
-            // In a pinch, the index finger is usually curved but extended away from the palm base.
-            const indexNotBuried = dist(indexTip, indexMCP) > 0.08; 
-            
-            if (indexNotBuried) {
-               return { gesture: GestureType.PINCH, tip };
-            }
-          }
-
-          // 2. POINT
-          // Criteria: Index Extended, others Curled.
-          // We allow the Thumb to be anywhere (relaxed).
-          if (indexExt && !middleExt && !ringExt && !pinkyExt) {
-            return { gesture: GestureType.POINT, tip };
-          }
-
-          // 3. FIST
-          // Criteria: Index, Middle, Ring, Pinky Curled.
-          if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
+          // --- PRIORITY LOGIC ---
+          // 1. FIST (Reset) - Highest Priority
+          // Strict check: All 4 fingers must be curled tight.
+          if (allCurled) {
              return { gesture: GestureType.FIST, tip };
           }
 
-          // 4. OPEN PALM
-          // Criteria: All non-thumb fingers extended.
-          if (indexExt && middleExt && ringExt && pinkyExt) {
-             // Usually thumb is out too for a full open palm, but 4 fingers is a strong enough signal
+          // 2. OPEN PALM (Explode)
+          // Strict check: All 4 fingers must be extended.
+          if (allExtended) {
+             // Ensure fingers are somewhat spread or clearly away from wrist
              return { gesture: GestureType.OPEN_PALM, tip };
           }
 
-          return { gesture: GestureType.NONE, tip };
+          // 3. PINCH (Click/Select)
+          // Logic: Thumb tip is close to Index tip.
+          // We allow this even if other fingers are loose.
+          const pinchDist = dist(thumbTip, indexTip);
+          
+          // Threshold: 15% of hand scale is a good pinch zone
+          if (pinchDist < handScale * 0.15) {
+             return { gesture: GestureType.PINCH, tip };
+          }
+
+          // 4. POINT / CURSOR (Default Fallback)
+          // If the hand is visible, but NOT a Fist, NOT Open Palm, and NOT Pinching...
+          // We treat it as a "Point" or "Hover".
+          // This ensures the cursor NEVER disappears as long as the hand is tracked.
+          return { gesture: GestureType.POINT, tip };
+          
         }
       } catch (e) {
         return { gesture: GestureType.NONE, tip: null };

@@ -1,18 +1,13 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
-import { Float, PointMaterial } from '@react-three/drei';
+
+import React, { useMemo, useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { Float } from '@react-three/drei';
 import * as THREE from 'three';
 import { TreeMode } from '../types';
-import { PHOTOS_DATA as DATA_CONST } from '../constants';
-
-const PHOTOS = DATA_CONST || [];
 
 interface TreeProps {
   mode: TreeMode;
-  onPhotoSelect: (id: string) => void;
-  selectedPhotoId: string | null;
-  cursorPosition: { x: number, y: number } | null;
-  isClicking: boolean;
+  // Props related to photos removed
 }
 
 const LIGHT_COLORS = ['#ffaa00', '#ff5500', '#ffcc00', '#ff4400'];
@@ -56,14 +51,13 @@ const TreeLights = () => {
                     color={l.color}
                     distance={5}
                     decay={2}
-                    // Shadows disabled to prevent MAX_TEXTURE_IMAGE_UNITS error
                 />
             ))}
         </>
     );
 };
 
-export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, selectedPhotoId, cursorPosition, isClicking }) => {
+export const ChristmasTree: React.FC<TreeProps> = ({ mode }) => {
   const groupRef = useRef<THREE.Group>(null);
   
   const leavesRef = useRef<THREE.InstancedMesh>(null);
@@ -71,9 +65,6 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
   const ballsRef = useRef<THREE.InstancedMesh>(null);
   const flakesRef = useRef<THREE.InstancedMesh>(null);
   
-  const [hoveredPhoto, setHoveredPhoto] = useState<string | null>(null);
-  const { camera } = useThree();
-
   const { leafData, giftData, ballData, flakeData } = useMemo(() => {
     
     const createArrays = () => ({
@@ -128,7 +119,7 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
     const giftBlue = "#0044aa";
     const giftGreen = "#006633";
 
-    for (let y = treeBottomY; y < treeBottomY + treeHeight; y += 0.1) {
+    for (let y = treeBottomY; y < treeBottomY + treeHeight; y += 0.2) {
        const h = (y - treeBottomY) / treeHeight;
        const invH = 1 - h; 
        
@@ -136,8 +127,8 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
        currentMaxR += (Math.sin(y * 10) * 0.25 * invH); 
        currentMaxR = Math.max(0, currentMaxR);
 
-       for (let x = -currentMaxR; x <= currentMaxR; x += 0.12) {
-         for (let z = -currentMaxR; z <= currentMaxR; z += 0.12) {
+       for (let x = -currentMaxR; x <= currentMaxR; x += 0.25) {
+         for (let z = -currentMaxR; z <= currentMaxR; z += 0.25) {
             const dist = Math.sqrt(x*x + z*z);
             
             if (dist < currentMaxR) {
@@ -201,7 +192,12 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
   useFrame((state, delta) => {
     if (!groupRef.current) return;
 
-    groupRef.current.rotation.y += delta * 0.15;
+    // Normal Rotation
+    if (mode === TreeMode.NORMAL) {
+       groupRef.current.rotation.y += delta * 0.15;
+    } 
+    // If exploded, we might want the tree particles to drift or the group to slow down
+    // Keeping it simple for now
 
     const time = state.clock.elapsedTime;
     const isExploded = mode === TreeMode.EXPLODED;
@@ -247,7 +243,6 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
 
             if (isExploded) {
                 dummy.rotation.set(time + i, time + i, 0);
-                // Keep particles visible, scale them down slightly instead of 0
                 dummy.scale.set(sx * 0.6, sy * 0.6, sz * 0.6); 
             } else {
                 const rx = data.rotations[ix];
@@ -279,39 +274,6 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
     animateMesh(giftsRef, giftData, 1.0);
     animateMesh(ballsRef, ballData, 1.0);
     animateMesh(flakesRef, flakeData, 1.0, true);
-
-    if (cursorPosition) {
-        const cursorClipX = (cursorPosition.x * 2) - 1;
-        const cursorClipY = -(cursorPosition.y * 2) + 1;
-        let foundHover = null;
-
-        PHOTOS.forEach(photo => {
-            const angle = groupRef.current!.rotation.y;
-            const x = photo.position[0];
-            const y = photo.position[1];
-            const z = photo.position[2];
-
-            const worldX = x * Math.cos(angle) + z * Math.sin(angle);
-            const worldZ = -x * Math.sin(angle) + z * Math.cos(angle);
-            
-            const posMultiplier = isExploded ? 2.5 : 1.0;
-            const finalX = worldX * posMultiplier;
-            const finalY = y * posMultiplier + (-1.2); 
-            const finalZ = worldZ * posMultiplier;
-
-            const vec = new THREE.Vector3(finalX, finalY, finalZ);
-            vec.project(camera);
-
-            const dist = Math.sqrt(Math.pow(vec.x - cursorClipX, 2) + Math.pow(vec.y - cursorClipY, 2));
-
-            if (dist < 0.15) foundHover = photo.id;
-        });
-
-        setHoveredPhoto(foundHover);
-        if (foundHover && isClicking && selectedPhotoId !== foundHover) {
-            onPhotoSelect(foundHover);
-        }
-    }
   });
 
   return (
@@ -329,7 +291,7 @@ export const ChristmasTree: React.FC<TreeProps> = ({ mode, onPhotoSelect, select
         />
       </instancedMesh>
 
-      {/* 2. GIFTS - Using Standard BoxGeometry for reliability */}
+      {/* 2. GIFTS - BoxGeometry */}
       <instancedMesh ref={giftsRef} args={[undefined, undefined, giftData.count]} castShadow receiveShadow>
         <boxGeometry args={[0.15, 0.15, 0.15]} />
         <meshStandardMaterial 
